@@ -1,0 +1,67 @@
+a) Roles of Each Service
+
+Clients: Submit orders and consume market data (500 RPS total).
+AWS API Gateway + Route 53: Routes requests, ensures HA with failover to standby region.
+Authentication Service (Cognito + EKS): Validates users and API keys.
+DynamoDB Global Tables: Stores user data and balances with low-latency access.
+Order Management Service (EKS + Kafka): Validates and queues orders.
+Matching Engine (EC2 + Redis): Matches orders with minimal latency.
+Market Data Service (AppSync + CloudFront): Streams real-time updates.
+Trade Settlement Service (EKS + SQS): Updates balances post-trade.
+Aurora DB + S3: Logs trades and backups.
+Monitoring (CloudWatch + X-Ray): Tracks latency and throughput.
+
+b) For Scaling Beyond Current Setup (500 RPS)
+The current setup handles 500 RPS with a p99 <100ms, but as the platform grows (e.g., to 5,000 or 50,000 RPS), here’s how it scales:
+
+1) Short-Term Growth (5,000 RPS)
+
+API Gateway: Already serverless; no change needed (handles millions RPS).
+Authentication Service: Increase EKS pods (e.g., 5 → 20) via auto-scaling based on CPU/memory. Cognito scales automatically.
+DynamoDB: Boost provisioned capacity (e.g., 6,000 RCUs/WCUs) or switch to on-demand mode.
+Order Management: Add EKS nodes and Kafka partitions (e.g., 3 → 10) to distribute load.
+Matching Engine: Shard by trading pair (e.g., BTC/USD, ETH/USD) across multiple EC2 instances. Scale Redis Cluster nodes (e.g., 3 → 6).
+Market Data: AppSync and CloudFront scale naturally; add more WebSocket endpoints if needed.
+Trade Settlement: Scale EKS workers (e.g., 5 → 15) based on SQS queue depth.
+Aurora: Add read replicas for analytics; increase write capacity with larger instance (e.g., db.r5.large → db.r5.xlarge).
+Monitoring: Enhance CloudWatch dashboards; add X-Ray sampling for deeper tracing.
+
+
+2) Long-Term Growth (50,000 RPS)
+
+Multi-Region Active-Active: Shift us-west-2 from standby to active, splitting load with us-east-1. Use Route 53 latency-based routing.
+Matching Engine: Deploy dedicated EC2 clusters per region, sharded by trading pair groups (e.g., majors vs. alts). Use Redis cross-region replication for consistency.
+Kafka: Increase cluster size (e.g., 10 → 50 brokers) and partition count (e.g., 10 → 100) for higher throughput.
+DynamoDB: Enable auto-scaling with higher limits; partition data by user or trading pair if hotkeys emerge.
+Market Data: Deploy AppSync in multiple regions, with CloudFront edge locations caching globally.
+Cost Optimization: Use Spot Instances for non-critical workloads (e.g., settlement workers) and Reserved Instances for Matching Engine base load.
+Load Testing: Simulate 50,000 RPS with tools like Locust to identify bottlenecks, adjusting shard counts and instance sizes.
+
+c) Latency
+Caching: Add ElastiCache for frequently accessed data (e.g., user balances) to keep p99 <100ms.
+Edge Optimization: Expand CloudFront usage for static API responses.
+Profiling: Use X-Ray to optimize slow paths (e.g., settlement delays).
+Latency <100ms, and CloudFront reduces load on origins.
+EKS + SQS (Trade Settlement Service)
+Why Chosen: EKS workers process SQS trade messages (<20ms), updating DynamoDB. SQS ensures no trade is lost (HA).
+
+Alternatives:
+
+Lambda: Simpler, but cold starts risk >100ms p99.
+Rationale: EKS + SQS provides consistent latency and reliability within 100ms.
+Aurora DB + S3
+Why Chosen: Aurora logs trades asynchronously (<50ms writes) with multi-AZ HA. S3 backs up snapshots cheaply.
+
+==================================================================================
+
+2) Latency Budget Breakdown (p99 <100ms)
+
+API Gateway: ~10ms
+
+Authentication: ~20ms
+Order Management: ~20ms
+Matching Engine: ~10ms
+Market Data: ~20ms
+Settlement: ~20ms (async, off critical path)
+
+Total: ~80ms (headroom for network jitter)
